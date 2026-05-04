@@ -363,6 +363,7 @@ function DashboardView({monthTx,txs,selMonth,budgets,wallets}) {
   const wltSummary=wallets.filter(w=>w.enabled).map(w=>w.type==='credit'?{...w,dispBal:w.creditLimit-creditUsed(w,txs),sub:`ใช้แล้ว ฿${fmt(creditUsed(w,txs))}`,isCredit:true}:{...w,dispBal:walletBal(w,txs),sub:null,isCredit:false});
   const totalAssets=wltSummary.filter(w=>!w.isCredit).reduce((s,w)=>s+w.dispBal,0);
   const recent=monthTx.slice(0,6);
+  const dailyData=useMemo(()=>{const m={};monthTx.forEach(t=>{const day=t.date.split('-')[2];if(!m[day])m[day]={day:parseInt(day),income:0,expense:0};if(t.type==='income')m[day].income+=t.amount;else m[day].expense+=t.amount;});return Object.values(m).sort((a,b)=>a.day-b.day);},[monthTx]);
   return(
     <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:18}}>
       <div style={card({gridColumn:'1 / -1'})}>
@@ -374,6 +375,19 @@ function DashboardView({monthTx,txs,selMonth,budgets,wallets}) {
           <Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:12}} formatter={(v,n)=>[`฿${fmt(v)}`,n==='income'?'รายรับ':'รายจ่าย']}/>
           <Bar dataKey="income" fill={C.income} radius={[5,5,0,0]}/><Bar dataKey="expense" fill={C.expense} radius={[5,5,0,0]}/>
         </BarChart></ResponsiveContainer>
+      </div>
+      <div style={card({gridColumn:'1 / -1'})}>
+        <h3 style={{fontSize:14,fontWeight:600,marginBottom:18,color:C.textSec}}>รายรับ-รายจ่ายรายวัน (เดือนนี้)</h3>
+        {dailyData.length===0?(<div style={{textAlign:'center',color:C.textMuted,padding:'50px 0',fontSize:13}}>ยังไม่มีรายการในเดือนนี้</div>):(
+          <ResponsiveContainer width="100%" height={200}><BarChart data={dailyData} barGap={4} barCategoryGap="25%">
+            <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false}/>
+            <XAxis dataKey="day" tick={{fill:C.textMuted,fontSize:11}} axisLine={false} tickLine={false}/>
+            <YAxis tick={{fill:C.textMuted,fontSize:11}} axisLine={false} tickLine={false} tickFormatter={fmtShort} width={40}/>
+            <Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:12}} formatter={(v,n)=>[`฿${fmt(v)}`,n==='income'?'รายรับ':'รายจ่าย']} labelFormatter={d=>`วันที่ ${d}`}/>
+            <Legend formatter={n=>n==='income'?'รายรับ':'รายจ่าย'} wrapperStyle={{fontSize:12,color:C.textMuted,paddingTop:8}}/>
+            <Bar dataKey="income" fill={C.income} radius={[4,4,0,0]}/><Bar dataKey="expense" fill={C.expense} radius={[4,4,0,0]}/>
+          </BarChart></ResponsiveContainer>
+        )}
       </div>
       <div style={card()}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
