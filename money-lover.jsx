@@ -295,6 +295,16 @@ export default function App() {
         {view==='settings'     && <SettingsView     incomeCats={incomeCats} setIncomeCats={setIncomeCats} expenseCats={expenseCats} setExpenseCats={setExpenseCats} authData={authData} onLogout={handleLogout} onReset={handleReset}/>}
       </main>
 
+      {/* ── Mobile Bottom Action Bar ── */}
+      {isMobile&&<div style={{position:'fixed',bottom:0,left:0,right:0,zIndex:998,background:C.surface,borderTop:`1px solid ${C.border}`,padding:'10px 16px',display:'flex',gap:10}}>
+        <button onClick={()=>{setEditTx(null);setShowTxModal(true);}} style={{flex:1,padding:'12px',borderRadius:12,background:C.primary,border:'none',color:'#fff',fontWeight:700,fontSize:15,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+          <Plus size={18}/>เพิ่มรายการ
+        </button>
+        <button onClick={()=>setShowTransfer(true)} style={{flex:1,padding:'12px',borderRadius:12,background:C.card,border:`1px solid ${C.border}`,color:C.textMuted,fontWeight:500,fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+          <ArrowLeftRight size={16}/>โอนเงิน
+        </button>
+      </div>}
+
       {showTxModal  && <TxModal   editTx={editTx} wallets={wallets} incomeCats={incomeCats} expenseCats={expenseCats} onSave={saveTx} onClose={()=>{setShowTxModal(false);setEditTx(null);}}/>}
       {showTransfer && <TransferModal wallets={wallets} onTransfer={doTransfer} onClose={()=>setShowTransfer(false)}/>}
     </div>
