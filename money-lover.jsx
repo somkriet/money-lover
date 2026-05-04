@@ -3,7 +3,7 @@ import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, LineChart, Line, CartesianGrid, Legend
 } from "recharts";
-import { Home, List, Target, BarChart2, Wallet, Plus, ArrowLeftRight, Settings } from "lucide-react";
+import { Home, List, Target, BarChart2, Wallet, Plus, ArrowLeftRight, Settings, Menu, ChevronLeft, ChevronRight } from "lucide-react";
 
 // ── Theme ──────────────────────────────────────────────────────────────────
 const C = {
@@ -135,6 +135,14 @@ export default function App() {
   const [editTx,       setEditTx]      = useState(null);
   const [selMonth,     setSelMonth]    = useState(nowYM);
   const [showTransfer, setShowTransfer]= useState(false);
+  const [sideOpen,     setSideOpen]    = useState(window.innerWidth>768);
+  const [winW,         setWinW]        = useState(window.innerWidth);
+  useEffect(()=>{
+    const fn=()=>{setWinW(window.innerWidth);if(window.innerWidth<=768)setSideOpen(false);};
+    window.addEventListener('resize',fn);
+    return()=>window.removeEventListener('resize',fn);
+  },[]);
+  const isMobile=winW<=768;
 
   useEffect(()=>{ localStorage.setItem('ml_wlt', JSON.stringify(wallets)); },[wallets]);
   useEffect(()=>{ localStorage.setItem('ml_txs', JSON.stringify(txs)); },[txs]);
@@ -199,49 +207,80 @@ export default function App() {
         .txr:hover{background:${C.cardHover}!important}
         .wltr:hover{background:${C.cardHover}!important}
         .emb:hover{transform:scale(1.2)}
+        @media(max-width:768px){
+          .stat-grid{grid-template-columns:1fr 1fr!important}
+          .stat-grid>div:last-child{grid-column:1/-1}
+          .main-pad{padding:18px 14px 80px!important}
+        }
       `}</style>
 
+      {/* ── Mobile Backdrop ── */}
+      {isMobile&&sideOpen&&<div onClick={()=>setSideOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',zIndex:999}}/>}
+
       {/* ── Sidebar ── */}
-      <aside style={{width:230,background:C.surface,borderRight:`1px solid ${C.border}`,display:'flex',flexDirection:'column',padding:'24px 0',position:'sticky',top:0,height:'100vh',flexShrink:0}}>
-        <div style={{padding:'0 20px 28px'}}>
-          <div style={{display:'flex',alignItems:'center',gap:10}}>
-            <div style={{width:40,height:40,borderRadius:12,background:C.primaryBg,border:`1px solid ${C.primaryBdr}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>{authData?.avatar||'💚'}</div>
-            <div>
-              <div style={{fontWeight:700,fontSize:14,color:C.text,lineHeight:1.2}}>{authData?.name||'Money Lover'}</div>
+      <aside style={{
+        width:isMobile?230:sideOpen?230:64,
+        background:C.surface,borderRight:`1px solid ${C.border}`,
+        display:'flex',flexDirection:'column',padding:'24px 0',
+        position:isMobile?'fixed':'sticky',top:0,left:0,
+        height:'100vh',flexShrink:0,
+        zIndex:isMobile?1000:1,
+        transform:isMobile&&!sideOpen?'translateX(-100%)':'translateX(0)',
+        transition:'transform 0.25s ease, width 0.2s ease',
+        overflow:'hidden',
+      }}>
+        <button onClick={()=>setSideOpen(o=>!o)} style={{position:'absolute',top:16,right:8,background:'none',border:'none',color:C.textMuted,cursor:'pointer',padding:4,borderRadius:6,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          {sideOpen||isMobile?<ChevronLeft size={16}/>:<ChevronRight size={16}/>}
+        </button>
+        <div style={{padding:'0 16px 28px',overflow:'hidden'}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}>
+            <div style={{width:40,height:40,borderRadius:12,background:C.primaryBg,border:`1px solid ${C.primaryBdr}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,flexShrink:0}}>{authData?.avatar||'💚'}</div>
+            {(sideOpen||isMobile)&&<div style={{minWidth:0}}>
+              <div style={{fontWeight:700,fontSize:14,color:C.text,lineHeight:1.2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{authData?.name||'Money Lover'}</div>
               <div style={{fontSize:11,color:C.textMuted}}>บัญชีรายรับ-รายจ่าย</div>
-            </div>
+            </div>}
           </div>
         </div>
-        <div style={{padding:'0 14px 20px'}}>
+        {(sideOpen||isMobile)&&<div style={{padding:'0 14px 20px'}}>
           <MonthYearPicker selMonth={selMonth} onChange={setSelMonth}/>
-        </div>
-        <nav style={{flex:1}}>
+        </div>}
+        <nav style={{flex:1,overflow:'auto'}}>
           {nav.map(({id,label,Icon})=>(
-            <button key={id} className="nb" onClick={()=>setView(id)} style={{
-              width:'100%',display:'flex',alignItems:'center',gap:12,padding:'11px 20px',background:view===id?C.primaryBg:'none',
+            <button key={id} className="nb" onClick={()=>{setView(id);if(isMobile)setSideOpen(false);}} style={{
+              width:'100%',display:'flex',alignItems:'center',
+              gap:sideOpen||isMobile?12:0,
+              justifyContent:sideOpen||isMobile?'flex-start':'center',
+              padding:sideOpen||isMobile?'11px 20px':'13px 0',
+              background:view===id?C.primaryBg:'none',
               border:'none',borderLeft:view===id?`3px solid ${C.primary}`:'3px solid transparent',
               color:view===id?C.primary:C.textMuted,cursor:'pointer',fontSize:14,fontWeight:view===id?600:400,textAlign:'left',transition:'all 0.15s',
-            }}><Icon size={17}/>{label}</button>
+            }}><Icon size={17}/>{(sideOpen||isMobile)&&label}</button>
           ))}
         </nav>
-        <div style={{padding:'16px 14px 0',display:'flex',flexDirection:'column',gap:8}}>
-          <button onClick={()=>{setEditTx(null);setShowTxModal(true);}} style={{width:'100%',padding:'11px',borderRadius:10,background:C.primary,border:'none',color:'#fff',fontWeight:700,fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
-            <Plus size={16}/>เพิ่มรายการ
-          </button>
-          <button onClick={()=>setShowTransfer(true)} style={{width:'100%',padding:'9px',borderRadius:10,background:C.card,border:`1px solid ${C.border}`,color:C.textMuted,fontWeight:500,fontSize:13,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
-            <ArrowLeftRight size={14}/>โอนเงินข้ามบัญชี
-          </button>
+        <div style={{padding:'16px 10px 0',display:'flex',flexDirection:'column',gap:8}}>
+          {sideOpen||isMobile?<>
+            <button onClick={()=>{setEditTx(null);setShowTxModal(true);if(isMobile)setSideOpen(false);}} style={{width:'100%',padding:'11px',borderRadius:10,background:C.primary,border:'none',color:'#fff',fontWeight:700,fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}><Plus size={16}/>เพิ่มรายการ</button>
+            <button onClick={()=>{setShowTransfer(true);if(isMobile)setSideOpen(false);}} style={{width:'100%',padding:'9px',borderRadius:10,background:C.card,border:`1px solid ${C.border}`,color:C.textMuted,fontWeight:500,fontSize:13,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}><ArrowLeftRight size={14}/>โอนเงินข้ามบัญชี</button>
+          </>:<>
+            <button onClick={()=>{setEditTx(null);setShowTxModal(true);}} style={{width:'100%',padding:'10px 0',borderRadius:10,background:C.primary,border:'none',color:'#fff',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}><Plus size={18}/></button>
+            <button onClick={()=>setShowTransfer(true)} style={{width:'100%',padding:'9px 0',borderRadius:10,background:C.card,border:`1px solid ${C.border}`,color:C.textMuted,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}><ArrowLeftRight size={15}/></button>
+          </>}
         </div>
       </aside>
 
       {/* ── Main ── */}
-      <main style={{flex:1,overflow:'auto',padding:'28px 28px 40px'}}>
+      <main className="main-pad" style={{flex:1,overflow:'auto',padding:'28px 28px 40px',minWidth:0}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-end',marginBottom:24}}>
-          <div><h1 style={{fontSize:22,fontWeight:700,color:C.text}}>{nav.find(n=>n.id===view)?.label}</h1>
-          <p style={{fontSize:12,color:C.textMuted,marginTop:2}}>เดือน{monthLabel}</p></div>
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            {isMobile&&<button onClick={()=>setSideOpen(true)} style={{background:'none',border:`1px solid ${C.border}`,borderRadius:8,color:C.textSec,cursor:'pointer',padding:'6px 8px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+              <Menu size={18}/>
+            </button>}
+            <div><h1 style={{fontSize:22,fontWeight:700,color:C.text}}>{nav.find(n=>n.id===view)?.label}</h1>
+            <p style={{fontSize:12,color:C.textMuted,marginTop:2}}>เดือน{monthLabel}</p></div>
+          </div>
         </div>
         {view!=='settings'&&(
-          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14,marginBottom:24}}>
+          <div className="stat-grid" style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14,marginBottom:24}}>
             <StatCard label="รายรับทั้งหมด"  value={totalIncome}              type="income"/>
             <StatCard label="รายจ่ายทั้งหมด" value={totalExpense}             type="expense"/>
             <StatCard label="คงเหลือสุทธิ"   value={totalIncome-totalExpense} type="balance"/>
