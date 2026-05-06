@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { auth, db } from './src/firebase.js';
-import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
@@ -118,6 +118,7 @@ const iBase = {width:'100%',background:C.bg,border:`1px solid ${C.border}`,borde
 // ── Auth helpers ───────────────────────────────────────────────────────────
 const USER_AVATARS = ['😊','🧑','👩','👨','🧒','👧','🦊','🐼','🐨','🦁','🐯','🦋'];
 const hashPin = (pin) => { let h=0; for(let i=0;i<pin.length;i++){h=Math.imul(31,h)+pin.charCodeAt(i)|0;} return h.toString(36); };
+const ML_PWD  = (pin) => `ML_${pin}_2024`;
 
 // ══════════════════════════════════════════════════════════════════════════
 // ROOT APP
@@ -136,7 +137,10 @@ export default function App() {
   const [expenseCats,  setExpenseCats] = useState(()=>load('ml_ecat',DEFAULT_EXPENSE_CATS));
   const [uid,          setUid]         = useState(null);
   const [showMigrate,  setShowMigrate] = useState(false);
-  const fbLoading = useRef(true);
+  const [fbChecked,    setFbChecked]   = useState(false);
+  const [landingMode,  setLandingMode] = useState('default');
+  const fbLoading   = useRef(true);
+  const autoAuthRef = useRef(false);
   const [showTxModal,  setShowTxModal] = useState(false);
   const [editTx,       setEditTx]      = useState(null);
   const [selMonth,     setSelMonth]    = useState(nowYM);
@@ -161,10 +165,15 @@ export default function App() {
   useEffect(()=>{ localStorage.setItem('ml_icat',JSON.stringify(incomeCats)); _incomeCats=incomeCats; _allCats=[...incomeCats,...expenseCats]; fsSet('incomeCats',{items:incomeCats}); },[incomeCats,fsSet]);
   useEffect(()=>{ localStorage.setItem('ml_ecat',JSON.stringify(expenseCats)); _expenseCats=expenseCats; _allCats=[...incomeCats,...expenseCats]; fsSet('expenseCats',{items:expenseCats}); },[expenseCats,fsSet]);
 
-  // ── Firebase Anonymous Auth + Firestore load ──
+  // ── Firebase Auth + Firestore load ──
   useEffect(()=>{
     const unsub = onAuthStateChanged(auth, async(user)=>{
-      if(!user){ signInAnonymously(auth); return; }
+      if(!user){
+        // ไม่มี session → แสดง LandingScreen
+        fbLoading.current = false;
+        setFbChecked(true);
+        return;
+      }
       setUid(user.uid);
       try {
         const [wSnap,tSnap,bSnap,icSnap,ecSnap,aSnap] = await Promise.all([
@@ -187,13 +196,10 @@ export default function App() {
             localStorage.setItem('ml_auth', JSON.stringify(ad));
             setAuthData(ad);
           }
-        } else {
-          // ตรวจสอบว่ามีข้อมูลจริงใน localStorage หรือไม่
-          const lsTxs = JSON.parse(localStorage.getItem('ml_txs')||'[]');
-          if(lsTxs.length > 0) setShowMigrate(true);
         }
+        if(autoAuthRef.current){ autoAuthRef.current=false; setAuthed(true); }
       } catch(e){ console.error('Firebase load error:', e); }
-      finally { fbLoading.current = false; }
+      finally { fbLoading.current = false; setFbChecked(true); }
     });
     return ()=>unsub();
   },[]);
@@ -203,14 +209,43 @@ export default function App() {
   const totalExpense = useMemo(()=>monthTx.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0),[monthTx]);
 
   // ── Handlers ──
-  const handleSetup = (d) => {
-    localStorage.setItem('ml_auth',JSON.stringify(d));
-    setAuthData(d);
-    setAuthed(true);
-    if(uid) setDoc(doc(db,'users',uid,'data','auth'), d).catch(()=>{});
+  const handleSetup = async(d) => {
+    // d = { name, username, avatar, pin }
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, `${d.username}@ml-app.com`, ML_PWD(d.pin));
+      const newUid = cred.user.uid;
+      setUid(newUid);
+      const authSave = { name:d.name, avatar:d.avatar, username:d.username, pinHash:hashPin(d.pin) };
+      localStorage.setItem('ml_auth', JSON.stringify(authSave));
+      setAuthData(authSave);
+      await setDoc(doc(db,'users',newUid,'data','auth'), authSave).catch(()=>{});
+      fbLoading.current = false;
+      setFbChecked(true);
+      setAuthed(true);
+    } catch(e) {
+      if(e.code==='auth/email-already-in-use') return 'ชื่อผู้ใช้นี้มีคนใช้แล้ว กรุณาเลือกชื่ออื่น';
+      return 'เกิดข้อผิดพลาด กรุณาลองใหม่';
+    }
   };
   const handleLogout = () => setAuthed(false);
-  const handleReset  = () => { localStorage.removeItem('ml_auth'); setAuthData(null); setAuthed(false); };
+  const handleReset  = async() => {
+    localStorage.removeItem('ml_auth');
+    setAuthData(null); setAuthed(false); setUid(null); setLandingMode('default');
+    await signOut(auth).catch(()=>{});
+  };
+
+  const handleLoginExisting = async({username, pin}) => {
+    try {
+      autoAuthRef.current = true;
+      await signInWithEmailAndPassword(auth, `${username.trim().toLowerCase()}@ml-app.com`, ML_PWD(pin));
+      // onAuthStateChanged จะ fire → โหลดข้อมูล → setAuthed(true)
+    } catch(e) {
+      autoAuthRef.current = false;
+      const bad = ['auth/invalid-credential','auth/user-not-found','auth/wrong-password'];
+      if(bad.includes(e.code)) return 'ชื่อผู้ใช้หรือ PIN ไม่ถูกต้อง';
+      return 'เกิดข้อผิดพลาด กรุณาลองใหม่';
+    }
+  };
 
   const handleMigrate = async() => {
     if(!uid) return;
@@ -254,10 +289,12 @@ export default function App() {
   ];
 
   // ── Early return AFTER all hooks ──
+  if (!fbChecked) return <SplashScreen/>;
   if (!authed) {
-    return authData
-      ? <LoginScreen  authData={authData} onSuccess={()=>setAuthed(true)}/>
-      : <SetupScreen  onDone={handleSetup}/>;
+    if (authData) return <LoginScreen authData={authData} onSuccess={()=>setAuthed(true)}/>;
+    if (landingMode==='setup') return <SetupScreen onDone={handleSetup}/>;
+    if (landingMode==='login') return <LoginExistingScreen onLogin={handleLoginExisting} onBack={()=>setLandingMode('default')}/>;
+    return <LandingScreen onSetup={()=>setLandingMode('setup')} onLogin={()=>setLandingMode('login')}/>;
   }
 
   return (
@@ -1348,20 +1385,117 @@ function LoginScreen({authData,onSuccess}) {
   );
 }
 
+// ── SplashScreen ───────────────────────────────────────────────────────────
+function SplashScreen() {
+  return(
+    <div style={{minHeight:'100vh',background:'#07100a',display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:16,fontFamily:"'Sarabun',sans-serif"}}>
+      <div style={{width:72,height:72,borderRadius:20,background:'#052e16',border:'2px solid #14532d',display:'flex',alignItems:'center',justifyContent:'center',fontSize:36}}>💚</div>
+      <div style={{color:'#4b7a5a',fontSize:14}}>กำลังโหลด...</div>
+    </div>
+  );
+}
+
+// ── LandingScreen ──────────────────────────────────────────────────────────
+function LandingScreen({onSetup,onLogin}) {
+  const st={minHeight:'100vh',background:'#07100a',display:'flex',alignItems:'center',justifyContent:'center',padding:20,fontFamily:"'Sarabun',sans-serif"};
+  return(
+    <div style={st}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap');*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}@keyframes fadeUp{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}.fu{animation:fadeUp 0.4s ease}`}</style>
+      <div className="fu" style={{width:'100%',maxWidth:360,textAlign:'center'}}>
+        <div style={{width:80,height:80,borderRadius:24,background:'#052e16',border:'2px solid #14532d',display:'flex',alignItems:'center',justifyContent:'center',fontSize:40,margin:'0 auto 16px'}}>💚</div>
+        <div style={{fontSize:26,fontWeight:700,color:'#f0fdf4',marginBottom:6}}>Money Lover</div>
+        <div style={{fontSize:13,color:'#4b7a5a',marginBottom:48}}>บันทึกรายรับ-รายจ่าย ง่ายๆ</div>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <button onClick={onSetup} style={{width:'100%',padding:'16px',borderRadius:14,background:'#22c55e',border:'none',color:'#fff',fontWeight:700,fontSize:16,cursor:'pointer',fontFamily:"'Sarabun',sans-serif"}}>
+            + สร้างบัญชีใหม่
+          </button>
+          <button onClick={onLogin} style={{width:'100%',padding:'16px',borderRadius:14,background:'#121f15',border:'1px solid #1a3020',color:'#86efac',fontWeight:600,fontSize:15,cursor:'pointer',fontFamily:"'Sarabun',sans-serif"}}>
+            มีบัญชีอยู่แล้ว → เข้าสู่ระบบ
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── LoginExistingScreen ────────────────────────────────────────────────────
+function LoginExistingScreen({onLogin,onBack}) {
+  const [step,setStep]=useState(1); // 1=username, 2=pin
+  const [username,setUsername]=useState('');
+  const [pin,setPin]=useState('');
+  const [error,setError]=useState('');
+  const [loading,setLoading]=useState(false);
+  React.useEffect(()=>{
+    if(step===2&&pin.length===4){
+      (async()=>{
+        setLoading(true); setError('');
+        const err = await onLogin({username:username.trim().toLowerCase(), pin});
+        if(err){ setError(err); setPin(''); setLoading(false); }
+      })();
+    }
+  },[pin,step]);
+  const st={minHeight:'100vh',background:'#07100a',display:'flex',alignItems:'center',justifyContent:'center',padding:20,fontFamily:"'Sarabun',sans-serif"};
+  return(
+    <div style={st}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap');*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}.fu{animation:fadeUp 0.35s ease}`}</style>
+      <div className="fu" style={{width:'100%',maxWidth:340,textAlign:'center'}}>
+        <div style={{width:72,height:72,borderRadius:20,background:'#052e16',border:'2px solid #14532d',display:'flex',alignItems:'center',justifyContent:'center',fontSize:36,margin:'0 auto 16px'}}>🔑</div>
+        <div style={{fontSize:22,fontWeight:700,color:'#f0fdf4',marginBottom:6}}>เข้าสู่ระบบ</div>
+        <div style={{fontSize:13,color:'#4b7a5a',marginBottom:32}}>ใช้บัญชีที่มีอยู่</div>
+        {step===1&&(
+          <div>
+            <input value={username} onChange={e=>setUsername(e.target.value.replace(/\s/g,''))} placeholder="Username..." maxLength={20}
+              autoFocus
+              style={{width:'100%',background:'#121f15',border:'1px solid #1a3020',borderRadius:10,color:'#f0fdf4',padding:'13px 14px',fontSize:16,outline:'none',textAlign:'center',marginBottom:14,fontFamily:"'Sarabun',sans-serif",letterSpacing:'0.05em'}}/>
+            {error&&<div style={{fontSize:13,color:'#f87171',marginBottom:12}}>{error}</div>}
+            <button onClick={()=>{if(username.trim().length>=3){setError('');setStep(2);}else setError('กรุณากรอก Username');}}
+              style={{width:'100%',padding:'14px',borderRadius:12,background:'#22c55e',border:'none',color:'#fff',fontWeight:700,fontSize:15,cursor:'pointer',fontFamily:"'Sarabun',sans-serif",marginBottom:12}}>
+              ถัดไป →
+            </button>
+            <button onClick={onBack} style={{background:'none',border:'none',color:'#4b7a5a',cursor:'pointer',fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>← กลับ</button>
+          </div>
+        )}
+        {step===2&&(
+          <div>
+            <div style={{fontSize:14,color:'#86efac',marginBottom:4}}>@{username}</div>
+            <div style={{fontSize:13,color:'#4b7a5a',marginBottom:24}}>{loading?'กำลังเข้าสู่ระบบ...':'กรอก PIN 4 หลัก'}</div>
+            {error&&<div style={{fontSize:13,color:'#f87171',marginBottom:12}}>{error}</div>}
+            {!loading&&<PinPad pin={pin} setPin={setPin}/>}
+            {!loading&&<button onClick={()=>{setStep(1);setPin('');setError('');}} style={{marginTop:18,background:'none',border:'none',color:'#4b7a5a',cursor:'pointer',fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>← เปลี่ยน Username</button>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SetupScreen({onDone}) {
   const [step,setStep]=useState(1);
   const [name,setName]=useState('');
+  const [username,setUsername]=useState('');
   const [avatar,setAvatar]=useState('😊');
   const [pin,setPin]=useState('');
   const [cpin,setCpin]=useState('');
   const [perr,setPerr]=useState('');
+  const [loading,setLoading]=useState(false);
+  const usernameOk = /^[a-zA-Z0-9_]{3,20}$/.test(username);
   React.useEffect(()=>{if(step===2&&pin.length===4)setStep(3);},[pin,step]);
   React.useEffect(()=>{
     if(step===3&&cpin.length===4){
-      if(cpin===pin)onDone({name:name.trim()||'ผู้ใช้',avatar,pinHash:hashPin(pin)});
-      else{setPerr('PIN ไม่ตรงกัน');setTimeout(()=>{setCpin('');setPerr('');setStep(2);setPin('');},800);}
+      if(cpin===pin){
+        (async()=>{
+          setLoading(true);
+          const err = await onDone({name:name.trim()||'ผู้ใช้', username:username.trim().toLowerCase(), avatar, pin});
+          if(err){ setPerr(err); setTimeout(()=>{setPerr('');setStep(1);setPin('');setCpin('');setLoading(false);},2000); }
+        })();
+      } else{setPerr('PIN ไม่ตรงกัน');setTimeout(()=>{setCpin('');setPerr('');setStep(2);setPin('');},800);}
     }
   },[cpin,step]);
+  const goStep2 = () => {
+    if(!name.trim()){ setPerr('กรุณากรอกชื่อ'); return; }
+    if(!usernameOk){ setPerr('Username ต้องเป็นภาษาอังกฤษ/ตัวเลข/_ อย่างน้อย 3 ตัว'); return; }
+    setPerr(''); setStep(2);
+  };
   const st={minHeight:'100vh',background:'#07100a',display:'flex',alignItems:'center',justifyContent:'center',padding:20,fontFamily:"'Sarabun',sans-serif"};
   return(
     <div style={st}>
@@ -1381,9 +1515,13 @@ function SetupScreen({onDone}) {
                 <button key={a} onClick={()=>setAvatar(a)} style={{width:52,height:52,borderRadius:14,fontSize:26,cursor:'pointer',background:avatar===a?'#052e16':'#121f15',border:`2px solid ${avatar===a?'#22c55e':'#1a3020'}`,transition:'all 0.15s'}}>{a}</button>
               ))}
             </div>
-            <input value={name} onChange={e=>setName(e.target.value)} placeholder="ชื่อของคุณ..." maxLength={20} onKeyDown={e=>e.key==='Enter'&&name.trim()&&setStep(2)}
-              style={{width:'100%',background:'#121f15',border:'1px solid #1a3020',borderRadius:10,color:'#f0fdf4',padding:'12px 14px',fontSize:15,outline:'none',textAlign:'center',marginBottom:18,fontFamily:"'Sarabun',sans-serif"}}/>
-            <button onClick={()=>name.trim()?setStep(2):alert('กรุณากรอกชื่อ')} style={{width:'100%',padding:'14px',borderRadius:12,background:'#22c55e',border:'none',color:'#fff',fontWeight:700,fontSize:15,cursor:'pointer',fontFamily:"'Sarabun',sans-serif"}}>ถัดไป →</button>
+            <input value={name} onChange={e=>setName(e.target.value)} placeholder="ชื่อของคุณ (แสดงในแอป)..." maxLength={20}
+              style={{width:'100%',background:'#121f15',border:'1px solid #1a3020',borderRadius:10,color:'#f0fdf4',padding:'12px 14px',fontSize:15,outline:'none',textAlign:'center',marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}/>
+            <input value={username} onChange={e=>setUsername(e.target.value.replace(/\s/g,''))} placeholder="Username (ใช้ login ข้ามเครื่อง)..." maxLength={20}
+              style={{width:'100%',background:'#121f15',border:`1px solid ${usernameOk||!username?'#1a3020':'#7f1d1d'}`,borderRadius:10,color:'#f0fdf4',padding:'12px 14px',fontSize:15,outline:'none',textAlign:'center',marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}/>
+            <div style={{fontSize:11,color:'#4b7a5a',marginBottom:14}}>ตัวอักษรภาษาอังกฤษ, ตัวเลข หรือ _ เท่านั้น (3-20 ตัว)</div>
+            {perr&&<div style={{fontSize:12,color:'#f87171',marginBottom:10}}>{perr}</div>}
+            <button onClick={goStep2} style={{width:'100%',padding:'14px',borderRadius:12,background:'#22c55e',border:'none',color:'#fff',fontWeight:700,fontSize:15,cursor:'pointer',fontFamily:"'Sarabun',sans-serif"}}>ถัดไป →</button>
           </div>
         )}
         {step===2&&(
@@ -1396,10 +1534,10 @@ function SetupScreen({onDone}) {
         )}
         {step===3&&(
           <div className={perr?'sk':''}>
-            <div style={{fontSize:15,fontWeight:600,color:'#86efac',marginBottom:6}}>ยืนยัน PIN อีกครั้ง</div>
-            <div style={{fontSize:13,color:perr?'#f87171':'#4b7a5a',marginBottom:28}}>{perr||'กรอก PIN ซ้ำเพื่อยืนยัน'}</div>
-            <PinPad pin={cpin} setPin={setCpin}/>
-            <button onClick={()=>{setStep(2);setPin('');setCpin('');setPerr('');}} style={{marginTop:20,background:'none',border:'none',color:'#4b7a5a',cursor:'pointer',fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>← ย้อนกลับ</button>
+            <div style={{fontSize:15,fontWeight:600,color:'#86efac',marginBottom:6}}>{loading?'กำลังสร้างบัญชี...':'ยืนยัน PIN อีกครั้ง'}</div>
+            <div style={{fontSize:13,color:perr?'#f87171':'#4b7a5a',marginBottom:28}}>{perr||(loading?'รอสักครู่...':'กรอก PIN ซ้ำเพื่อยืนยัน')}</div>
+            {!loading&&<PinPad pin={cpin} setPin={setCpin}/>}
+            {!loading&&<button onClick={()=>{setStep(2);setPin('');setCpin('');setPerr('');}} style={{marginTop:20,background:'none',border:'none',color:'#4b7a5a',cursor:'pointer',fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>← ย้อนกลับ</button>}
           </div>
         )}
       </div>
