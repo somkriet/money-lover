@@ -1,4 +1,7 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { auth, db } from './src/firebase.js';
+import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, LineChart, Line, CartesianGrid, Legend
@@ -131,6 +134,9 @@ export default function App() {
   const [budgets,      setBudgets]     = useState(()=>load('ml_bgt',makeSampleBudgets()));
   const [incomeCats,   setIncomeCats]  = useState(()=>load('ml_icat',DEFAULT_INCOME_CATS));
   const [expenseCats,  setExpenseCats] = useState(()=>load('ml_ecat',DEFAULT_EXPENSE_CATS));
+  const [uid,          setUid]         = useState(null);
+  const [showMigrate,  setShowMigrate] = useState(false);
+  const fbLoading = useRef(true);
   const [showTxModal,  setShowTxModal] = useState(false);
   const [editTx,       setEditTx]      = useState(null);
   const [selMonth,     setSelMonth]    = useState(nowYM);
@@ -144,20 +150,81 @@ export default function App() {
   },[]);
   const isMobile=winW<=768;
 
-  useEffect(()=>{ localStorage.setItem('ml_wlt', JSON.stringify(wallets)); },[wallets]);
-  useEffect(()=>{ localStorage.setItem('ml_txs', JSON.stringify(txs)); },[txs]);
-  useEffect(()=>{ localStorage.setItem('ml_bgt', JSON.stringify(budgets)); },[budgets]);
-  useEffect(()=>{ localStorage.setItem('ml_icat',JSON.stringify(incomeCats)); _incomeCats=incomeCats; _allCats=[...incomeCats,...expenseCats]; },[incomeCats]);
-  useEffect(()=>{ localStorage.setItem('ml_ecat',JSON.stringify(expenseCats)); _expenseCats=expenseCats; _allCats=[...incomeCats,...expenseCats]; },[expenseCats]);
+  const fsSet = useCallback((key, data) => {
+    if (!uid || fbLoading.current) return;
+    setDoc(doc(db, 'users', uid, 'data', key), data).catch(()=>{});
+  }, [uid]);
+
+  useEffect(()=>{ localStorage.setItem('ml_wlt', JSON.stringify(wallets)); fsSet('wallets',{items:wallets}); },[wallets,fsSet]);
+  useEffect(()=>{ localStorage.setItem('ml_txs', JSON.stringify(txs)); fsSet('txs',{items:txs}); },[txs,fsSet]);
+  useEffect(()=>{ localStorage.setItem('ml_bgt', JSON.stringify(budgets)); fsSet('budgets',{items:budgets}); },[budgets,fsSet]);
+  useEffect(()=>{ localStorage.setItem('ml_icat',JSON.stringify(incomeCats)); _incomeCats=incomeCats; _allCats=[...incomeCats,...expenseCats]; fsSet('incomeCats',{items:incomeCats}); },[incomeCats,fsSet]);
+  useEffect(()=>{ localStorage.setItem('ml_ecat',JSON.stringify(expenseCats)); _expenseCats=expenseCats; _allCats=[...incomeCats,...expenseCats]; fsSet('expenseCats',{items:expenseCats}); },[expenseCats,fsSet]);
+
+  // ── Firebase Anonymous Auth + Firestore load ──
+  useEffect(()=>{
+    const unsub = onAuthStateChanged(auth, async(user)=>{
+      if(!user){ signInAnonymously(auth); return; }
+      setUid(user.uid);
+      try {
+        const [wSnap,tSnap,bSnap,icSnap,ecSnap,aSnap] = await Promise.all([
+          getDoc(doc(db,'users',user.uid,'data','wallets')),
+          getDoc(doc(db,'users',user.uid,'data','txs')),
+          getDoc(doc(db,'users',user.uid,'data','budgets')),
+          getDoc(doc(db,'users',user.uid,'data','incomeCats')),
+          getDoc(doc(db,'users',user.uid,'data','expenseCats')),
+          getDoc(doc(db,'users',user.uid,'data','auth')),
+        ]);
+        const hasData = wSnap.exists() || tSnap.exists();
+        if(hasData){
+          if(wSnap.exists())  setWallets(wSnap.data().items);
+          if(tSnap.exists())  setTxs(tSnap.data().items);
+          if(bSnap.exists())  setBudgets(bSnap.data().items);
+          if(icSnap.exists()) setIncomeCats(icSnap.data().items);
+          if(ecSnap.exists()) setExpenseCats(ecSnap.data().items);
+          if(aSnap.exists()){
+            const ad = aSnap.data();
+            localStorage.setItem('ml_auth', JSON.stringify(ad));
+            setAuthData(ad);
+          }
+        } else {
+          // ตรวจสอบว่ามีข้อมูลจริงใน localStorage หรือไม่
+          const lsTxs = JSON.parse(localStorage.getItem('ml_txs')||'[]');
+          if(lsTxs.length > 0) setShowMigrate(true);
+        }
+      } catch(e){ console.error('Firebase load error:', e); }
+      finally { fbLoading.current = false; }
+    });
+    return ()=>unsub();
+  },[]);
 
   const monthTx      = useMemo(()=>txs.filter(t=>t.date.startsWith(selMonth)).sort((a,b)=>b.date.localeCompare(a.date)),[txs,selMonth]);
   const totalIncome  = useMemo(()=>monthTx.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0),[monthTx]);
   const totalExpense = useMemo(()=>monthTx.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0),[monthTx]);
 
   // ── Handlers ──
-  const handleSetup  = (d) => { localStorage.setItem('ml_auth',JSON.stringify(d)); setAuthData(d); setAuthed(true); };
-  const handleLogout = ()  => setAuthed(false);
-  const handleReset  = ()  => { localStorage.removeItem('ml_auth'); setAuthData(null); setAuthed(false); };
+  const handleSetup = (d) => {
+    localStorage.setItem('ml_auth',JSON.stringify(d));
+    setAuthData(d);
+    setAuthed(true);
+    if(uid) setDoc(doc(db,'users',uid,'data','auth'), d).catch(()=>{});
+  };
+  const handleLogout = () => setAuthed(false);
+  const handleReset  = () => { localStorage.removeItem('ml_auth'); setAuthData(null); setAuthed(false); };
+
+  const handleMigrate = async() => {
+    if(!uid) return;
+    const ad = JSON.parse(localStorage.getItem('ml_auth')||'null');
+    await Promise.all([
+      setDoc(doc(db,'users',uid,'data','wallets'),   {items:wallets}),
+      setDoc(doc(db,'users',uid,'data','txs'),       {items:txs}),
+      setDoc(doc(db,'users',uid,'data','budgets'),   {items:budgets}),
+      setDoc(doc(db,'users',uid,'data','incomeCats'),{items:incomeCats}),
+      setDoc(doc(db,'users',uid,'data','expenseCats'),{items:expenseCats}),
+      ...(ad?[setDoc(doc(db,'users',uid,'data','auth'),ad)]:[]),
+    ]).catch(e=>console.error('Migration error:',e));
+    setShowMigrate(false);
+  };
 
   const saveTx = (tx) => { setTxs(prev=>editTx?prev.map(t=>t.id===editTx.id?{...tx,id:editTx.id}:t):[...prev,{...tx,id:Date.now().toString()}]); setShowTxModal(false); setEditTx(null); };
   const deleteTx = (id) => setTxs(prev=>prev.filter(t=>t.id!==id));
@@ -292,7 +359,7 @@ export default function App() {
         {view==='wallets'      && <WalletsView      wallets={wallets} setWallets={setWallets} txs={txs} onTransfer={()=>setShowTransfer(true)}/>}
         {view==='budget'       && <BudgetView       budgets={budgets} setBudgets={setBudgets} monthTx={monthTx} expenseCats={expenseCats}/>}
         {view==='reports'      && <ReportsView      txs={txs} selMonth={selMonth}/>}
-        {view==='settings'     && <SettingsView     incomeCats={incomeCats} setIncomeCats={setIncomeCats} expenseCats={expenseCats} setExpenseCats={setExpenseCats} authData={authData} onLogout={handleLogout} onReset={handleReset}/>}
+        {view==='settings'     && <SettingsView     incomeCats={incomeCats} setIncomeCats={setIncomeCats} expenseCats={expenseCats} setExpenseCats={setExpenseCats} authData={authData} onLogout={handleLogout} onReset={handleReset} uid={uid}/>}
       </main>
 
       {/* ── Mobile Bottom Action Bar ── */}
@@ -307,6 +374,17 @@ export default function App() {
 
       {showTxModal  && <TxModal   editTx={editTx} wallets={wallets} incomeCats={incomeCats} expenseCats={expenseCats} onSave={saveTx} onClose={()=>{setShowTxModal(false);setEditTx(null);}}/>}
       {showTransfer && <TransferModal wallets={wallets} onTransfer={doTransfer} onClose={()=>setShowTransfer(false)}/>}
+
+      {/* ── Migration Banner ── */}
+      {showMigrate&&<div style={{position:'fixed',bottom:isMobile?80:24,left:'50%',transform:'translateX(-50%)',zIndex:2000,background:'#1a3020',border:'1px solid #22c55e',borderRadius:14,padding:'14px 20px',display:'flex',alignItems:'center',gap:14,boxShadow:'0 4px 24px rgba(0,0,0,0.5)',maxWidth:'calc(100vw - 32px)',width:480}}>
+        <div style={{fontSize:22}}>☁️</div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:700,fontSize:13,color:'#f0fdf4'}}>พบข้อมูลในเครื่อง</div>
+          <div style={{fontSize:12,color:'#86efac',marginTop:2}}>นำเข้าข้อมูลเดิมไปเก็บบน Firebase?</div>
+        </div>
+        <button onClick={handleMigrate} style={{padding:'8px 16px',borderRadius:8,background:'#22c55e',border:'none',color:'#fff',fontWeight:700,fontSize:13,cursor:'pointer',flexShrink:0}}>นำเข้าเลย</button>
+        <button onClick={()=>setShowMigrate(false)} style={{padding:'8px 12px',borderRadius:8,background:'none',border:'1px solid #1a3020',color:'#4b7a5a',fontSize:12,cursor:'pointer',flexShrink:0}}>ข้าม</button>
+      </div>}
     </div>
   );
 }
@@ -976,7 +1054,7 @@ function TxModal({editTx,wallets,incomeCats,expenseCats,onSave,onClose}) {
 // ══════════════════════════════════════════════════════════════════════════
 // SETTINGS VIEW
 // ══════════════════════════════════════════════════════════════════════════
-function SettingsView({incomeCats,setIncomeCats,expenseCats,setExpenseCats,authData,onLogout,onReset}) {
+function SettingsView({incomeCats,setIncomeCats,expenseCats,setExpenseCats,authData,onLogout,onReset,uid}) {
   const [tab,      setTab]      = useState('expense');
   const [editCat,  setEditCat]  = useState(null);
   const [showForm, setShowForm] = useState(false);
@@ -1018,6 +1096,15 @@ function SettingsView({incomeCats,setIncomeCats,expenseCats,setExpenseCats,authD
         <button onClick={()=>{if(confirm('ล้างข้อมูลทั้งหมดและรีเซ็ตแอป?\nการกระทำนี้ไม่สามารถย้อนกลับได้'))onReset();}} style={{width:'100%',marginTop:10,padding:'10px',borderRadius:10,background:C.expenseBg,border:`1px solid ${C.expenseBdr}`,color:C.expense,fontSize:13,fontWeight:500,cursor:'pointer'}}>
           ⚠️ ล้างข้อมูลทั้งหมด &amp; รีเซ็ต
         </button>
+        {uid&&<div style={{marginTop:14,padding:'10px 14px',borderRadius:10,background:C.bg,border:`1px solid ${C.border}`,display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <div>
+            <div style={{fontSize:11,color:C.textMuted}}>Firebase Account ID</div>
+            <div style={{fontSize:13,color:C.textSec,fontFamily:'monospace',letterSpacing:'0.05em',marginTop:2}}>{uid.slice(0,8)}...{uid.slice(-4)}</div>
+          </div>
+          <button onClick={()=>{navigator.clipboard.writeText(uid);alert('คัดลอก Account ID แล้ว');}} style={{padding:'6px 12px',borderRadius:8,background:C.card,border:`1px solid ${C.border}`,color:C.textMuted,fontSize:12,cursor:'pointer'}}>
+            คัดลอก
+          </button>
+        </div>}
       </div>
 
       {/* ── Section: หมวดหมู่ ── */}
@@ -1089,7 +1176,7 @@ function SettingsView({incomeCats,setIncomeCats,expenseCats,setExpenseCats,authD
       {showChangePIN&&(
         <ChangePINModal
           authData={authData}
-          onDone={(newAuth)=>{ localStorage.setItem('ml_auth',JSON.stringify(newAuth)); setShowChangePIN(false); alert('เปลี่ยน PIN เรียบร้อยแล้ว!'); }}
+          onDone={(newAuth)=>{ localStorage.setItem('ml_auth',JSON.stringify(newAuth)); if(uid) setDoc(doc(db,'users',uid,'data','auth'),newAuth).catch(()=>{}); setShowChangePIN(false); alert('เปลี่ยน PIN เรียบร้อยแล้ว!'); }}
           onClose={()=>setShowChangePIN(false)}
         />
       )}
