@@ -195,9 +195,13 @@ export default function App() {
             const ad = aSnap.data();
             localStorage.setItem('ml_auth', JSON.stringify(ad));
             setAuthData(ad);
+            setAuthed(true); // auto-login เมื่อ Firebase session ยังอยู่ (refresh, same browser)
+          } else {
+            // มี Firebase session แต่ไม่มีข้อมูลใน Firestore → sign out
+            await signOut(auth).catch(()=>{});
           }
         }
-        if(autoAuthRef.current){ autoAuthRef.current=false; setAuthed(true); }
+        if(autoAuthRef.current){ autoAuthRef.current=false; }
       } catch(e){ console.error('Firebase load error:', e); }
       finally { fbLoading.current = false; setFbChecked(true); }
     });
@@ -227,7 +231,11 @@ export default function App() {
       return 'เกิดข้อผิดพลาด กรุณาลองใหม่';
     }
   };
-  const handleLogout = () => setAuthed(false);
+  const handleLogout = async() => {
+    localStorage.removeItem('ml_auth');
+    setAuthData(null); setAuthed(false); setUid(null); setLandingMode('default');
+    await signOut(auth).catch(()=>{});
+  };
   const handleReset  = async() => {
     localStorage.removeItem('ml_auth');
     setAuthData(null); setAuthed(false); setUid(null); setLandingMode('default');
@@ -339,10 +347,11 @@ export default function App() {
         <div style={{padding:'0 16px 28px',overflow:'hidden'}}>
           <div style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}>
             <div style={{width:40,height:40,borderRadius:12,background:C.primaryBg,border:`1px solid ${C.primaryBdr}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,flexShrink:0}}>{authData?.avatar||'💚'}</div>
-            {(sideOpen||isMobile)&&<div style={{minWidth:0}}>
+            {(sideOpen||isMobile)&&<div style={{minWidth:0,flex:1}}>
               <div style={{fontWeight:700,fontSize:14,color:C.text,lineHeight:1.2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{authData?.name||'Money Lover'}</div>
               <div style={{fontSize:11,color:C.textMuted}}>บัญชีรายรับ-รายจ่าย</div>
             </div>}
+            {(sideOpen||isMobile)&&<button onClick={()=>{if(confirm('ออกจากระบบ?'))handleLogout();}} title="ออกจากระบบ" style={{flexShrink:0,background:'none',border:`1px solid ${C.border}`,borderRadius:8,color:C.textMuted,cursor:'pointer',padding:'5px 7px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}} >🚪</button>}
           </div>
         </div>
         {(sideOpen||isMobile)&&<div style={{padding:'0 14px 20px'}}>
