@@ -56,13 +56,16 @@ const CAT_COLORS = ['#22c55e','#06b6d4','#f59e0b','#a855f7','#ef4444','#f97316',
 
 // ── Account types ──────────────────────────────────────────────────────────
 const ACCT_TYPES = [
-  { id:'cash',     label:'เงินสด',           emoji:'💵', desc:'เงินสดในมือ'           },
-  { id:'savings',  label:'บัญชีออมทรัพย์',  emoji:'🏧', desc:'บัญชีธนาคารออมทรัพย์' },
-  { id:'checking', label:'บัญชีเดินสะพัด',  emoji:'🏦', desc:'บัญชีธนาคารเดินสะพัด' },
-  { id:'credit',   label:'บัตรเครดิต',       emoji:'💳', desc:'บัตรเครดิต/ผ่อนชำระ'  },
+  { id:'cash',     label:'เงินสด',           emoji:'💵', desc:'เงินสดในมือ'                 },
+  { id:'savings',  label:'บัญชีออมทรัพย์',  emoji:'🏧', desc:'บัญชีธนาคารออมทรัพย์'       },
+  { id:'checking', label:'บัญชีเดินสะพัด',  emoji:'🏦', desc:'บัญชีธนาคารเดินสะพัด'       },
+  { id:'credit',   label:'บัตรเครดิต',       emoji:'💳', desc:'บัตรเครดิต/ผ่อนชำระ'         },
+  { id:'atm_card', label:'บัตรกดเงินสด',     emoji:'💴', desc:'บัตรกดเงินสด/วงเงินหมุนเวียน'},
+  { id:'loan',     label:'สินเชื่อ',          emoji:'📋', desc:'สินเชื่อส่วนบุคคล/กู้ยืม'    },
 ];
 const CARD_BRANDS    = ['VISA','Mastercard','JCB','American Express','UnionPay'];
-const WALLET_EMOJIS  = ['💵','💰','🏦','🏧','💳','💎','🎒','👛','📱','🌟','🔑','🏠','🎯','🪙','📊'];
+const LOAN_PROVIDERS = ['Line BK','Promise','True Money','Aeon','KTC','Easy Buy','Flash Money','อื่นๆ'];
+const WALLET_EMOJIS  = ['💵','💰','🏦','🏧','💳','💴','📋','💎','🎒','👛','📱','🌟','🔑','🏠','🎯','🪙','📊'];
 
 // ── Default wallets ────────────────────────────────────────────────────────
 const INIT_WALLETS = [
@@ -640,18 +643,20 @@ function WalletsView({wallets,setWallets,txs,onTransfer}) {
   const deleteW  = (id)=>{ if(confirm('ลบบัญชีนี้?'))setWallets(prev=>prev.filter(w=>w.id!==id)); };
   const toggleW  = (id)=>setWallets(prev=>prev.map(w=>w.id===id?{...w,enabled:!w.enabled}:w));
 
-  const totalAssets      = wallets.filter(w=>w.type!=='credit').reduce((s,w)=>s+walletBal(w,txs),0);
-  const totalCreditLimit = wallets.filter(w=>w.type==='credit').reduce((s,w)=>s+(w.creditLimit||0),0);
-  const totalCreditUsed  = wallets.filter(w=>w.type==='credit').reduce((s,w)=>s+creditUsed(w,txs),0);
+  const CR_TYPES = ['credit','atm_card'];
+  const totalAssets      = wallets.filter(w=>!CR_TYPES.includes(w.type)&&w.type!=='loan').reduce((s,w)=>s+walletBal(w,txs),0);
+  const totalCreditLimit = wallets.filter(w=>CR_TYPES.includes(w.type)).reduce((s,w)=>s+(w.creditLimit||0),0);
+  const totalCreditUsed  = wallets.filter(w=>CR_TYPES.includes(w.type)).reduce((s,w)=>s+creditUsed(w,txs),0);
+  const totalLoanOutstanding = wallets.filter(w=>w.type==='loan').reduce((s,w)=>s+Math.max(0,walletBal(w,txs)),0);
 
-  // Credit payment reminders
+  // Payment reminders (credit + atm_card + loan)
   const today=new Date();
-  const alerts=wallets.filter(w=>w.type==='credit'&&w.reminderEnabled).map(w=>{
+  const alerts=wallets.filter(w=>(CR_TYPES.includes(w.type)||w.type==='loan')&&w.reminderEnabled).map(w=>{
     const due=new Date(today.getFullYear(),today.getMonth(),w.paymentDueDay||1);
     if(due<today) due.setMonth(due.getMonth()+1);
     const days=Math.ceil((due-today)/(86400000));
-    const used=creditUsed(w,txs);
-    return days<=(w.reminderDays||10)&&used>0?{w,days,used}:null;
+    const owed = w.type==='loan' ? Math.max(0,walletBal(w,txs)) : creditUsed(w,txs);
+    return days<=(w.reminderDays||10)&&owed>0?{w,days,owed}:null;
   }).filter(Boolean);
 
   return(
@@ -660,13 +665,18 @@ function WalletsView({wallets,setWallets,txs,onTransfer}) {
       {alerts.map((a,i)=>(
         <div key={i} style={{background:'#451a03',border:'1px solid #7c2d12',borderRadius:12,padding:'12px 16px',marginBottom:12,display:'flex',alignItems:'center',gap:10}}>
           <span style={{fontSize:18}}>⏰</span>
-          <div><span style={{fontSize:13,fontWeight:600,color:C.warning}}>แจ้งเตือนชำระบัตร! </span><span style={{fontSize:13,color:C.textMuted}}>{a.w.name} · ยอดค้าง ฿{fmt(a.used)} · ครบกำหนดอีก {a.days} วัน</span></div>
+          <div><span style={{fontSize:13,fontWeight:600,color:C.warning}}>{a.w.type==='loan'?'แจ้งเตือนชำระสินเชื่อ! ':'แจ้งเตือนชำระบัตร! '}</span><span style={{fontSize:13,color:C.textMuted}}>{a.w.name} · ยอดค้าง ฿{fmt(a.owed)} · ครบกำหนดอีก {a.days} วัน</span></div>
         </div>
       ))}
 
       {/* KPI */}
-      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14,marginBottom:20}}>
-        {[{label:'สินทรัพย์รวม (ไม่รวมเครดิต)',val:totalAssets,col:C.income},{label:'วงเงินเครดิตรวม',val:totalCreditLimit,col:C.teal},{label:'ใช้บัตรเครดิตไปแล้ว',val:totalCreditUsed,col:C.warning}].map((s,i)=>(
+      <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:14,marginBottom:20}}>
+        {[
+          {label:'สินทรัพย์รวม',              val:totalAssets,          col:C.income},
+          {label:'วงเงินเครดิต/กดเงินสดรวม',  val:totalCreditLimit,     col:C.teal},
+          {label:'ใช้บัตรเครดิต/กดเงินสด',    val:totalCreditUsed,      col:C.warning},
+          {label:'ยอดคงค้างสินเชื่อรวม',       val:totalLoanOutstanding, col:C.expense},
+        ].map((s,i)=>(
           <div key={i} style={card()}><div style={{fontSize:11,color:C.textMuted,marginBottom:6}}>{s.label}</div><div style={{fontSize:17,fontWeight:700,color:s.col}}>฿{fmt(s.val)}</div></div>
         ))}
       </div>
@@ -675,26 +685,40 @@ function WalletsView({wallets,setWallets,txs,onTransfer}) {
       <div style={card({padding:0,marginBottom:14})}>
         {wallets.length===0?(<div style={{textAlign:'center',padding:'40px 0',color:C.textMuted}}>ยังไม่มีบัญชี</div>)
         :wallets.map((w,i)=>{
-          const isCr=w.type==='credit';
-          const bal  = isCr ? w.creditLimit-creditUsed(w,txs) : walletBal(w,txs);
-          const used = isCr ? creditUsed(w,txs) : null;
-          const pct  = isCr ? Math.min((creditUsed(w,txs)/(w.creditLimit||1))*100,100) : null;
+          const isCr   = CR_TYPES.includes(w.type);
+          const isLoan = w.type==='loan';
+          const crUsed = isCr ? creditUsed(w,txs) : null;
+          const pct    = isCr ? Math.min((crUsed/(w.creditLimit||1))*100,100) : null;
+          const loanBal= isLoan ? Math.max(0,walletBal(w,txs)) : null;
+          const loanPct= isLoan ? Math.min(((w.initBal||0)-(loanBal||0))/Math.max(w.initBal||1,1)*100,100) : null;
+          const bal    = isCr ? w.creditLimit-crUsed : walletBal(w,txs);
           const acctType=ACCT_TYPES.find(a=>a.id===w.type);
+          const iconBg = isCr?C.purpleBg:isLoan?'#1a0a00':C.primaryBg;
+          const iconBdr= isCr?C.purpleBdr:isLoan?'#7c3a0a':C.primaryBdr;
+          const tagBg  = isCr?C.purpleBg:isLoan?'#1a0a00':C.primaryBg;
+          const tagCol = isCr?C.purple:isLoan?'#fb923c':C.income;
+          const tagBdr = isCr?C.purpleBdr:isLoan?'#7c3a0a':C.primaryBdr;
           return(
             <div key={w.id} className="wltr" style={{display:'flex',alignItems:'center',gap:12,padding:'14px 20px',borderBottom:i<wallets.length-1?`1px solid ${C.border}`:'none',transition:'background 0.1s',background:'transparent'}}>
               {/* Icon */}
-              <div style={{width:46,height:46,borderRadius:12,flexShrink:0,background:isCr?C.purpleBg:C.primaryBg,border:`1px solid ${isCr?C.purpleBdr:C.primaryBdr}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>{w.emoji}</div>
+              <div style={{width:46,height:46,borderRadius:12,flexShrink:0,background:iconBg,border:`1px solid ${iconBdr}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>{w.emoji}</div>
               {/* Info */}
               <div style={{flex:1,minWidth:0}}>
                 <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                   <span style={{fontSize:14,fontWeight:600,color:C.text}}>{w.name}</span>
-                  <span style={{fontSize:10,background:isCr?C.purpleBg:C.primaryBg,color:isCr?C.purple:C.income,padding:'2px 7px',borderRadius:6,border:`1px solid ${isCr?C.purpleBdr:C.primaryBdr}`,fontWeight:500}}>{acctType?.label}</span>
+                  <span style={{fontSize:10,background:tagBg,color:tagCol,padding:'2px 7px',borderRadius:6,border:`1px solid ${tagBdr}`,fontWeight:500}}>{acctType?.label}</span>
                   {isCr&&w.cardBrand&&<span style={{fontSize:10,background:'#1e293b',color:'#94a3b8',padding:'2px 7px',borderRadius:6}}>{w.cardBrand}</span>}
+                  {isLoan&&w.loanProvider&&<span style={{fontSize:10,background:'#1e293b',color:'#94a3b8',padding:'2px 7px',borderRadius:6}}>{w.loanProvider}</span>}
                 </div>
                 {isCr?(
                   <div style={{marginTop:5}}>
-                    <div style={{fontSize:11,color:C.textMuted,marginBottom:3}}>ใช้ ฿{fmt(used)} / วงเงิน ฿{fmt(w.creditLimit)} · ชำระวันที่ {w.paymentDueDay}</div>
+                    <div style={{fontSize:11,color:C.textMuted,marginBottom:3}}>ใช้ ฿{fmt(crUsed)} / วงเงิน ฿{fmt(w.creditLimit)} · ชำระวันที่ {w.paymentDueDay}</div>
                     <div style={{background:C.border,borderRadius:4,height:5,width:200,overflow:'hidden'}}><div style={{width:`${pct}%`,height:'100%',borderRadius:4,background:pct>80?C.expense:pct>60?C.warning:C.teal}}/></div>
+                  </div>
+                ):isLoan?(
+                  <div style={{marginTop:5}}>
+                    <div style={{fontSize:11,color:C.textMuted,marginBottom:3}}>ยอดคงค้าง ฿{fmt(loanBal)} · ค่างวด ฿{fmt(w.monthlyPayment||0)} · ชำระวันที่ {w.paymentDueDay}</div>
+                    <div style={{background:C.border,borderRadius:4,height:5,width:200,overflow:'hidden'}}><div style={{width:`${loanPct}%`,height:'100%',borderRadius:4,background:'#22c55e'}}/></div>
                   </div>
                 ):(
                   <div style={{fontSize:12,color:C.textMuted,marginTop:3}}>ยอดคงเหลือ · {w.currency||'THB'}</div>
@@ -702,8 +726,9 @@ function WalletsView({wallets,setWallets,txs,onTransfer}) {
               </div>
               {/* Balance */}
               <div style={{textAlign:'right',flexShrink:0,marginRight:8}}>
-                <div style={{fontSize:15,fontWeight:700,color:isCr?C.teal:bal>=0?C.income:C.expense}}>฿{fmt(Math.abs(bal))}</div>
+                <div style={{fontSize:15,fontWeight:700,color:isCr?C.teal:isLoan?C.expense:bal>=0?C.income:C.expense}}>฿{fmt(isLoan?loanBal:Math.abs(bal))}</div>
                 {isCr&&<div style={{fontSize:10,color:C.textMuted,marginTop:1}}>วงเงินคงเหลือ</div>}
+                {isLoan&&<div style={{fontSize:10,color:C.textMuted,marginTop:1}}>ยอดคงค้าง</div>}
               </div>
               <Toggle checked={w.enabled} onChange={()=>toggleW(w.id)}/>
               <button onClick={()=>openEdit(w)} style={{background:'none',border:'none',color:C.textMuted,cursor:'pointer',padding:6,fontSize:18,lineHeight:1,marginLeft:4}}>›</button>
@@ -752,13 +777,22 @@ function WalletModal({editWlt,onSave,onDelete,onClose}) {
   const [reminderDays,   setReminderDays]  =useState(editWlt?.reminderDays    ||10);
   const [reminderEnabled,setReminderEnabled]=useState(editWlt?.reminderEnabled!=null?editWlt.reminderEnabled:true);
 
-  const acctType=ACCT_TYPES.find(a=>a.id===type);
-  const isCredit=type==='credit';
+  const [monthlyPayment, setMonthlyPayment] = useState(editWlt?.monthlyPayment || 0);
+  const [loanProvider,   setLoanProvider]   = useState(editWlt?.loanProvider   || '');
+
+  const acctType = ACCT_TYPES.find(a=>a.id===type);
+  const isCredit = type==='credit' || type==='atm_card';
+  const isLoan   = type==='loan';
 
   const handleSave=()=>{
     if(!name.trim()){alert('กรุณากรอกชื่อบัญชี');return;}
-    const base={type,name:name.trim(),emoji,currency:'THB',enabled:editWlt?.enabled??true,initBal:parseFloat(initBal)||0};
-    onSave(isCredit?{...base,creditLimit:parseFloat(creditLimit)||0,cardBrand,paymentDueDay:+paymentDueDay,billingCycleDay:+billingCycleDay,reminderDays:+reminderDays,reminderEnabled}:base);
+    const base={type,name:name.trim(),emoji,currency:'THB',enabled:editWlt?.enabled??true};
+    if(isCredit)
+      onSave({...base,initBal:0,creditLimit:parseFloat(creditLimit)||0,cardBrand,paymentDueDay:+paymentDueDay,billingCycleDay:+billingCycleDay,reminderDays:+reminderDays,reminderEnabled});
+    else if(isLoan)
+      onSave({...base,initBal:parseFloat(initBal)||0,loanProvider,monthlyPayment:parseFloat(monthlyPayment)||0,paymentDueDay:+paymentDueDay,reminderDays:+reminderDays,reminderEnabled});
+    else
+      onSave({...base,initBal:parseFloat(initBal)||0});
   };
 
   const lbl=(t)=><label style={{fontSize:12,color:C.textMuted,marginBottom:5,display:'block'}}>{t}</label>;
@@ -775,7 +809,7 @@ function WalletModal({editWlt,onSave,onDelete,onClose}) {
         {!editWlt&&(
           <div style={{marginBottom:20}}>
             {lbl('ประเภทบัญชี')}
-            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8}}>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
               {ACCT_TYPES.map(a=>(
                 <button key={a.id} onClick={()=>setType(a.id)} style={{padding:'12px 6px',borderRadius:10,border:`1px solid ${type===a.id?C.primary:C.border}`,background:type===a.id?C.primaryBg:C.bg,color:type===a.id?C.income:C.textMuted,cursor:'pointer',textAlign:'center',fontSize:12,transition:'all 0.15s'}}>
                   <div style={{fontSize:22,marginBottom:5}}>{a.emoji}</div>
@@ -824,7 +858,7 @@ function WalletModal({editWlt,onSave,onDelete,onClose}) {
         </div>
 
         {/* Section: ประเภทบัญชี (cash/savings/checking: initial balance) */}
-        {!isCredit&&(
+        {!isCredit&&!isLoan&&(
           <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,overflow:'hidden',marginBottom:14}}>
             <div style={{fontSize:12,fontWeight:600,color:C.textMuted,padding:'10px 14px',borderBottom:`1px solid ${C.border}`}}>ประเภทบัญชี {acctType?.label}</div>
             <div style={{display:'flex',alignItems:'center',padding:'12px 14px',gap:12}}>
@@ -835,10 +869,10 @@ function WalletModal({editWlt,onSave,onDelete,onClose}) {
           </div>
         )}
 
-        {/* Section: Credit card */}
+        {/* Section: Credit card / ATM card */}
         {isCredit&&(
           <div style={{background:C.purpleBg,border:`1px solid ${C.purpleBdr}`,borderRadius:12,overflow:'hidden',marginBottom:14}}>
-            <div style={{fontSize:12,fontWeight:600,color:C.purple,padding:'10px 14px',borderBottom:`1px solid ${C.purpleBdr}`}}>ประเภทบัญชี บัตรเครดิต</div>
+            <div style={{fontSize:12,fontWeight:600,color:C.purple,padding:'10px 14px',borderBottom:`1px solid ${C.purpleBdr}`}}>{type==='atm_card'?'บัตรกดเงินสด':'บัตรเครดิต'}</div>
             {[
               {icon:'💳',label:'ประเภทบัตร',content:<select value={cardBrand} onChange={e=>setCardBrand(e.target.value)} style={{...iBase,border:'none',background:'transparent',padding:'2px 0',fontSize:14,color:C.text,width:'auto',textAlign:'right'}}>{CARD_BRANDS.map(b=><option key={b}>{b}</option>)}</select>},
               {icon:'💰',label:'วงเงิน',content:<input type="number" value={creditLimit} onChange={e=>setCreditLimit(e.target.value)} style={{...iBase,border:'none',background:'transparent',padding:'2px 0',width:120,fontSize:14,color:C.text,textAlign:'right'}}/>},
@@ -853,6 +887,31 @@ function WalletModal({editWlt,onSave,onDelete,onClose}) {
             ))}
             {/* Reminder row */}
             <div style={{display:'flex',alignItems:'center',padding:'12px 14px',gap:12,borderTop:`1px solid ${C.purpleBdr}`}}>
+              <span style={{fontSize:18,width:24,flexShrink:0}}>🔔</span>
+              <span style={{fontSize:14,color:C.textMuted,flex:1}}>แจ้งเตือนล่วงหน้า (วัน)</span>
+              <input type="number" value={reminderDays} onChange={e=>setReminderDays(e.target.value)} min={1} max={30} style={{...iBase,border:'none',background:'transparent',padding:'2px 0',width:50,fontSize:14,color:C.text,textAlign:'right'}}/>
+              <Toggle checked={reminderEnabled} onChange={()=>setReminderEnabled(v=>!v)}/>
+            </div>
+          </div>
+        )}
+
+        {/* Section: สินเชื่อ */}
+        {isLoan&&(
+          <div style={{background:'#1a0a00',border:'1px solid #7c3a0a',borderRadius:12,overflow:'hidden',marginBottom:14}}>
+            <div style={{fontSize:12,fontWeight:600,color:'#fb923c',padding:'10px 14px',borderBottom:'1px solid #7c3a0a'}}>สินเชื่อ / กู้ยืม</div>
+            {[
+              {icon:'🏢',label:'เจ้าหนี้/ผู้ให้สินเชื่อ',content:<select value={loanProvider} onChange={e=>setLoanProvider(e.target.value)} style={{...iBase,border:'none',background:'transparent',padding:'2px 0',fontSize:14,color:C.text,width:'auto',textAlign:'right'}}><option value=''>-- เลือก --</option>{LOAN_PROVIDERS.map(p=><option key={p}>{p}</option>)}</select>},
+              {icon:'💰',label:'ยอดคงค้างปัจจุบัน (฿)',content:<input type="number" value={initBal} onChange={e=>setInitBal(e.target.value)} style={{...iBase,border:'none',background:'transparent',padding:'2px 0',width:130,fontSize:14,color:C.text,textAlign:'right'}}/>},
+              {icon:'📆',label:'ค่างวดต่อเดือน (฿)',content:<input type="number" value={monthlyPayment} onChange={e=>setMonthlyPayment(e.target.value)} style={{...iBase,border:'none',background:'transparent',padding:'2px 0',width:130,fontSize:14,color:C.text,textAlign:'right'}}/>},
+              {icon:'📅',label:'วันครบกำหนดชำระ',content:<select value={paymentDueDay} onChange={e=>setPaymentDueDay(e.target.value)} style={{...iBase,border:'none',background:'transparent',padding:'2px 0',fontSize:14,color:C.text,width:60,textAlign:'right'}}>{Array.from({length:28},(_,i)=><option key={i+1} value={i+1}>{i+1}</option>)}</select>},
+            ].map((row,i,arr)=>(
+              <div key={i} style={{display:'flex',alignItems:'center',padding:'12px 14px',borderBottom:i<arr.length-1?'1px solid #7c3a0a':'none',gap:12}}>
+                <span style={{fontSize:18,width:24,flexShrink:0}}>{row.icon}</span>
+                <span style={{fontSize:14,color:C.textMuted,flex:1}}>{row.label}</span>
+                {row.content}
+              </div>
+            ))}
+            <div style={{display:'flex',alignItems:'center',padding:'12px 14px',gap:12,borderTop:'1px solid #7c3a0a'}}>
               <span style={{fontSize:18,width:24,flexShrink:0}}>🔔</span>
               <span style={{fontSize:14,color:C.textMuted,flex:1}}>แจ้งเตือนล่วงหน้า (วัน)</span>
               <input type="number" value={reminderDays} onChange={e=>setReminderDays(e.target.value)} min={1} max={30} style={{...iBase,border:'none',background:'transparent',padding:'2px 0',width:50,fontSize:14,color:C.text,textAlign:'right'}}/>
